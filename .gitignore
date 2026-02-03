@@ -1,0 +1,7 @@
+.venv/
+venv/
+.env
+*.pyc
+__pycache__/
+processed_videos.json
+transcripts/

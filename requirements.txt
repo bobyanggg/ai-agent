@@ -1,0 +1,9 @@
+youtube-transcript-api>=0.6.0
+google-genai>=1.0.0
+requests>=2.28.0
+python-dotenv>=1.0.0
+
+# Optional: for TRANSCRIPT_FALLBACK=whisper (transcribe when YouTube has no captions)
+# Requires ffmpeg installed on the system.
+yt-dlp>=2024.1.0
+openai-whisper>=20231117
