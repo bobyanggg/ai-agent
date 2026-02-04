@@ -31,12 +31,25 @@ Crawls configured YouTube channels for new uploads, fetches transcripts, summari
    python main.py
    ```
 
+  **Single-video mode** (no channel discovery): pass one or more video URLs/IDs to process them (transcript → summarize → Telegram). Only `GEMINI_API_KEY`, `TELEGRAM_BOT_TOKEN`, and `TELEGRAM_CHAT_ID` are required.
+
+   ```bash
+   python main.py --video -jRur5z6TPk
+   python main.py --video "https://www.youtube.com/watch?v=-jRur5z6TPk"
+   python main.py --video -jRur5z6TPk https://youtu.be/abcdEFGhijk
+   ```
+
 ## Behaviour
 
 - **Discovery**: If `YOUTUBE_API_KEY` is set, the app uses YouTube Data API v3 to list today’s uploads for each channel. Otherwise it uses Brave Video Search (set `BRAVE_API_KEY`). At least one is required.
 - **Transcripts**: [youtube-transcript-api](https://pypi.org/project/youtube-transcript-api/) is tried first. If the video has no captions and `TRANSCRIPT_FALLBACK=whisper`, the app uses **yt-dlp** + **OpenAI Whisper** (requires `ffmpeg`).
 - **Summarization**: Transcript is sent to Gemini; summary can include pipe tables (| col | col |).
 - **Telegram**: One message per video (title, link, summary). Messages over 4096 characters are split. Idempotency: `processed_videos.json` stores processed video IDs.
+- **Saved outputs**:
+  - **Naming**: saved using `channel_YYYY_MM_DD.(txt|md)` where the date is the **video upload date** (`publishedAt`).
+    - Getting upload time requires `YOUTUBE_API_KEY`; if it’s not set, the script falls back to today’s UTC date.
+  - **Transcripts**: `transcripts/<channel>_YYYY_MM_DD.txt` (appended per video)
+  - **Summaries**: `summaries/<channel>_YYYY_MM_DD.md` (appended per video)
 
 ## Optional
 
