@@ -11,6 +11,7 @@ import requests
 logger = logging.getLogger(__name__)
 
 TELEGRAM_SEND_URL = "https://api.telegram.org/bot{token}/sendMessage"
+TELEGRAM_SEND_DOC_URL = "https://api.telegram.org/bot{token}/sendDocument"
 MAX_MESSAGE_LENGTH = 4096
 
 
@@ -75,3 +76,26 @@ def send_video_summary(
             if not send_message(token, chat_id, chunk, parse_mode=None):
                 return False
     return True
+
+
+def send_document(
+    token: str,
+    chat_id: str,
+    *,
+    filename: str,
+    content_bytes: bytes,
+    caption: str | None = None,
+) -> bool:
+    """Send a document (e.g. PDF) to Telegram chat."""
+    url = TELEGRAM_SEND_DOC_URL.format(token=token)
+    data = {"chat_id": chat_id}
+    if caption:
+        data["caption"] = caption
+    files = {"document": (filename, content_bytes)}
+    try:
+        resp = requests.post(url, data=data, files=files, timeout=60)
+        resp.raise_for_status()
+        return True
+    except Exception as e:
+        logger.warning("Telegram sendDocument failed: %s", e)
+        return False

@@ -4,7 +4,7 @@ Returns the same VideoResult shape as brave_search for drop-in use.
 Use this when you need videos actually uploaded by the channel (Brave search can return wrong channel).
 """
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import List
 
 import requests
@@ -41,20 +41,27 @@ def get_todays_videos(
     channel_identifier: str,
     *,
     count: int = 20,
+    lookback_hours: int = 24,
 ) -> List[VideoResult]:
     """
-    Get today's videos uploaded by the given channel using YouTube Data API v3.
+    Get recent videos uploaded by the given channel using YouTube Data API v3.
 
     channel_identifier: Handle with or without @ (e.g. @RhinoFinance or RhinoFinance).
-    Returns list of VideoResult (video_id, url, title) for videos published since start of today UTC.
+    Returns list of VideoResult (video_id, url, title) for videos published in the last N hours.
+
+    Note: Using "start of day UTC" often misses videos that are "today" in your local timezone
+    but still "yesterday" in UTC. A rolling lookback window is more robust.
     """
     channel_id = _channel_id_for_handle(api_key, channel_identifier)
     if not channel_id:
         return []
 
-    # Start of today UTC (RFC 3339: YYYY-MM-DDTHH:MM:SSZ only — no +00:00 and Z together)
-    today_start = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
-    published_after = today_start.strftime("%Y-%m-%dT%H:%M:%SZ")
+    # Rolling lookback window (RFC 3339: YYYY-MM-DDTHH:MM:SSZ)
+    if lookback_hours < 1:
+        lookback_hours = 1
+    published_after = (datetime.now(UTC) - timedelta(hours=lookback_hours)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
 
     params = {
         "part": "snippet",
