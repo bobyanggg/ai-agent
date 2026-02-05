@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import re
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -23,13 +24,11 @@ import requests
 from dotenv import load_dotenv
 
 from brave_search import VideoResult, get_todays_videos as get_todays_videos_brave
-from pdf_export import text_to_pdf_bytes
 from html_export import summary_markdown_to_html_doc
 from summarize import summarize_transcript
 from telegram_send import send_document
 from telegram_send import send_video_summary
 from transcript import get_transcript
-from txt_export import summary_markdown_to_pretty_txt
 from youtube_channel import get_todays_videos as get_todays_videos_youtube
 
 # YouTube video ID from URL or raw ID (e.g. watch?v=ID, youtu.be/ID, or -jRur5z6TPk)
@@ -45,12 +44,23 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-PROCESSED_STORE = Path(__file__).resolve().parent / "processed_videos.json"
-TRANSCRIPTS_DIR = Path(__file__).resolve().parent / "transcripts"
-SUMMARIES_DIR = Path(__file__).resolve().parent / "summaries"
-PDFS_DIR = Path(__file__).resolve().parent / "pdfs"
-TXTS_DIR = Path(__file__).resolve().parent / "txts"
-HTMLS_DIR = Path(__file__).resolve().parent / "htmls"
+def _app_root_dir() -> Path:
+    """
+    Base directory for reading/writing local files.
+
+    - Source run: repo directory (where main.py lives)
+    - PyInstaller onefile: directory containing the executable (persistent across runs)
+    """
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
+APP_ROOT = _app_root_dir()
+PROCESSED_STORE = APP_ROOT / "processed_videos.json"
+TRANSCRIPTS_DIR = APP_ROOT / "transcripts"
+SUMMARIES_DIR = APP_ROOT / "summaries"
+HTMLS_DIR = APP_ROOT / "htmls"
 
 
 def _video_id_from_input(s: str) -> str | None:
@@ -114,89 +124,6 @@ def _bool_env(name: str, default: bool = False) -> bool:
 def _yyyymmdd_hyphen(yyyymmdd: str) -> str:
     """Convert YYYY_MM_DD -> YYYY-MM-DD for filenames."""
     return yyyymmdd.replace("_", "-")
-
-
-def _build_pdf_text(
-    *,
-    title: str,
-    url: str,
-    channel_handle: str | None,
-    channel_title: str | None,
-    published_at: str | None,
-    summary: str,
-) -> str:
-    # Plain text so the PDF matches what you see in files.
-    lines: list[str] = [title, "", url, ""]
-    if channel_handle or channel_title:
-        lines.append(f"- Channel: {channel_handle or channel_title}")
-    if published_at:
-        lines.append(f"- PublishedAt: {published_at}")
-    if len(lines) > 4:
-        lines.append("")
-    lines.append(summary.strip())
-    lines.append("")
-    return "\n".join(lines)
-
-
-def _save_and_send_pdf(
-    *,
-    video_id: str,
-    yyyymmdd: str,
-    md: str,
-    pdf_title: str,
-    telegram_token: str,
-    telegram_chat_id: str,
-) -> None:
-    """Generate a PDF from plain text, save it locally, and send to Telegram."""
-    pdf_bytes = text_to_pdf_bytes(md)
-    filename = f"{video_id}_{yyyymmdd}.pdf"
-    try:
-        PDFS_DIR.mkdir(parents=True, exist_ok=True)
-        with open(PDFS_DIR / filename, "wb") as f:
-            f.write(pdf_bytes)
-    except Exception as e:
-        logger.warning("Could not save PDF for %s: %s", video_id, e)
-    ok = send_document(
-        telegram_token,
-        telegram_chat_id,
-        filename=filename,
-        content_bytes=pdf_bytes,
-        caption=f"{pdf_title}\n{video_id}",
-    )
-    if ok:
-        logger.info("Sent PDF for %s", video_id)
-    else:
-        logger.warning("Failed to send PDF for %s", video_id)
-
-
-def _save_and_send_txt(
-    *,
-    video_id: str,
-    yyyymmdd: str,
-    text: str,
-    telegram_token: str,
-    telegram_chat_id: str,
-) -> None:
-    """Save summary text as a .txt and send it to Telegram."""
-    filename = f"summary_{video_id}_{yyyymmdd}.txt"
-    content = text.encode("utf-8")
-    try:
-        TXTS_DIR.mkdir(parents=True, exist_ok=True)
-        with open(TXTS_DIR / filename, "wb") as f:
-            f.write(content)
-    except Exception as e:
-        logger.warning("Could not save TXT for %s: %s", video_id, e)
-    ok = send_document(
-        telegram_token,
-        telegram_chat_id,
-        filename=filename,
-        content_bytes=content,
-        caption=f"{video_id} summary",
-    )
-    if ok:
-        logger.info("Sent TXT for %s", video_id)
-    else:
-        logger.warning("Failed to send TXT for %s", video_id)
 
 
 def _save_and_send_html(
@@ -444,32 +371,6 @@ def run_single_video(
         summary_md=summary,
         video=video,
     )
-    if _bool_env("TELEGRAM_SEND_PDF", default=False):
-        md = _build_pdf_text(
-            title=title,
-            url=url,
-            channel_handle=meta.get("channel_handle"),
-            channel_title=meta.get("channel_title"),
-            published_at=meta.get("published_at"),
-            summary=summary,
-        )
-        _save_and_send_pdf(
-            video_id=video_id,
-            yyyymmdd=yyyymmdd,
-            md=md,
-            pdf_title=title,
-            telegram_token=telegram_token,
-            telegram_chat_id=telegram_chat_id,
-        )
-    if _bool_env("TELEGRAM_SEND_TXT", default=False):
-        txt = summary_markdown_to_pretty_txt(summary)
-        _save_and_send_txt(
-            video_id=video_id,
-            yyyymmdd=yyyymmdd,
-            text=txt,
-            telegram_token=telegram_token,
-            telegram_chat_id=telegram_chat_id,
-        )
     if _bool_env("TELEGRAM_SEND_HTML", default=False):
         html_doc = summary_markdown_to_html_doc(
             summary,
@@ -583,32 +484,6 @@ def process_video(
         summary_md=summary,
         video=video,
     )
-    if _bool_env("TELEGRAM_SEND_PDF", default=False):
-        md = _build_pdf_text(
-            title=video.title,
-            url=video.url,
-            channel_handle=meta.get("channel_handle"),
-            channel_title=meta.get("channel_title"),
-            published_at=meta.get("published_at"),
-            summary=summary,
-        )
-        _save_and_send_pdf(
-            video_id=video.video_id,
-            yyyymmdd=yyyymmdd,
-            md=md,
-            pdf_title=video.title,
-            telegram_token=telegram_token,
-            telegram_chat_id=telegram_chat_id,
-        )
-    if _bool_env("TELEGRAM_SEND_TXT", default=False):
-        txt = summary_markdown_to_pretty_txt(summary)
-        _save_and_send_txt(
-            video_id=video.video_id,
-            yyyymmdd=yyyymmdd,
-            text=txt,
-            telegram_token=telegram_token,
-            telegram_chat_id=telegram_chat_id,
-        )
     if _bool_env("TELEGRAM_SEND_HTML", default=False):
         html_doc = summary_markdown_to_html_doc(
             summary,

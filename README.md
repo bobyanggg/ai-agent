@@ -9,11 +9,30 @@ Crawls configured YouTube channels for new uploads, fetches transcripts, summari
 
 ## Setup
 
-1. Clone or copy this project, then create a virtualenv and install dependencies:
+1. Clone or copy this project, then create a virtualenv and install dependencies.
+
+   **Quick install script (recommended):**
+
+   ```bash
+   chmod +x install.sh
+   ./install.sh
+   ```
+
+   **Recommended (pinned, same versions as the repo author):**
 
    ```bash
    python -m venv .venv
    source .venv/bin/activate   # Windows: .venv\Scripts\activate
+   pip install -U pip
+   pip install -r requirements.lock.txt
+   ```
+
+   **Alternative (unpinned):**
+
+   ```bash
+   python -m venv .venv
+   source .venv/bin/activate   # Windows: .venv\Scripts\activate
+   pip install -U pip
    pip install -r requirements.txt
    ```
 
@@ -57,17 +76,79 @@ Crawls configured YouTube channels for new uploads, fetches transcripts, summari
     - Getting upload time requires `YOUTUBE_API_KEY`; if it’s not set, the script falls back to today’s UTC date.
   - **Transcripts**: `transcripts/<channel>_YYYY_MM_DD.txt` (appended per video)
   - **Summaries**: `summaries/<channel>_YYYY_MM_DD.md` (appended per video)
-  - **PDFs (optional)**: `pdfs/<video_id>_<YYYY_MM_DD>.pdf` (one PDF per video; sent to Telegram when enabled)
-  - **TXTs (optional)**: `txts/summary_<video_id>_<YYYY_MM_DD>.txt` (one TXT per video; sent to Telegram when enabled)
   - **HTMLs (optional)**: `htmls/<channel>_YYYY-MM-DD.html` (sent to Telegram when enabled)
+  - **Binary note**: when running the PyInstaller binary, these files are read/written relative to the **executable directory** (same folder as `dist/ai-agent`).
+
+## Repo structure
+
+```text
+ai-agent/
+  main.py                 # CLI entrypoint; orchestrates fetch → summarize → save → Telegram
+  transcript.py            # Transcript fetch (YouTube captions + optional Whisper fallback)
+  summarize.py             # Gemini summarization prompt + API call
+  html_export.py           # Convert summary markdown-ish text → styled HTML (real tables)
+  youtube_channel.py       # YouTube Data API discovery (preferred when YOUTUBE_API_KEY is set)
+  brave_search.py          # Brave Search discovery (fallback when no YOUTUBE_API_KEY)
+  telegram_send.py         # Telegram send message + sendDocument (HTML upload)
+  processed_videos.json    # Idempotency store (already-processed video IDs)
+
+  install.sh               # Create .venv and install from requirements.lock.txt
+  build_binary.sh          # Build a standalone macOS executable via PyInstaller
+  requirements.txt         # Minimal dependency list (unpinned)
+  requirements.lock.txt    # Fully pinned dependency lock (recommended)
+  .env.example             # Environment variable template
+
+  transcripts/             # Saved transcripts (appended per video)
+  summaries/               # Saved Markdown summaries (appended per video)
+  htmls/                   # Generated HTML summaries (one per day/channel)
+```
 
 ## Optional
 
 - **YouTube Data API**: Set `YOUTUBE_API_KEY` (enable YouTube Data API v3 in Google Cloud) so discovery uses the channel’s real uploads instead of Brave search.
 - **Whisper fallback**: Set `TRANSCRIPT_FALLBACK=whisper` and install `yt-dlp`, `openai-whisper`, and **ffmpeg**. Optional: `WHISPER_MODEL=tiny` or `WHISPER_MODEL=small`.
-- **Send per-video PDFs to Telegram**: Set `TELEGRAM_SEND_PDF=1`. This generates a simple readable PDF per video (saved under `./pdfs/`) and uploads it to Telegram as a document.
-- **Send per-video TXTs to Telegram**: Set `TELEGRAM_SEND_TXT=1`. This exports the summary to a `.txt` file and converts Markdown pipe tables into aligned plain-text tables (saved under `./txts/`), then uploads it to Telegram as a document.
 - **Send per-video HTMLs to Telegram**: Set `TELEGRAM_SEND_HTML=1`. This exports the summary to a self-contained `.html` file with real HTML tables (saved under `./htmls/`), then uploads it to Telegram as a document.
-- **Send text summary message**: By default the bot sends a text summary message. If `TELEGRAM_SEND_HTML=1`, it will send **only the HTML file** (no text) unless you explicitly change the setting/logic.
+- **Send text summary message**: Controlled by `TELEGRAM_SEND_SUMMARY` (default `1`). If `TELEGRAM_SEND_HTML=1`, the default behavior is to send **only the HTML file** (no text summary).
 - **Gemini model**: Set `GEMINI_MODEL` (e.g. `gemini-1.5-pro`) in `.env`.
 - **Scheduling**: Run `python main.py` via cron or a scheduler (e.g. once per day).
+
+## Build a standalone binary (macOS)
+
+This project can be packaged into a single executable using PyInstaller.
+
+```bash
+chmod +x build_binary.sh
+./build_binary.sh
+```
+
+- Output: `dist/<name>` (default: `dist/ai-agent`)
+- Run:
+
+```bash
+./dist/ai-agent --help
+./dist/ai-agent --video -jRur5z6TPk
+```
+
+### Binary build options
+
+PyInstaller builds are **not cross-platform** (build on each OS you want to support). On macOS, you can choose target arch.
+
+- `APP_NAME` (default: `ai-agent`)
+- `NAME_WITH_PLATFORM=1`: name output like `ai-agent-darwin-arm64`
+- `TARGET_ARCH=arm64|x86_64|universal2` (macOS only)
+
+Examples:
+
+```bash
+NAME_WITH_PLATFORM=1 ./build_binary.sh
+TARGET_ARCH=universal2 NAME_WITH_PLATFORM=1 ./build_binary.sh
+```
+
+## Updating the lock file (maintainers)
+
+If you add/remove dependencies, regenerate the lock file from your working venv:
+
+```bash
+source .venv/bin/activate
+pip freeze > requirements.lock.txt
+```
