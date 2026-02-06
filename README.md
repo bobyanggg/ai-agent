@@ -42,7 +42,7 @@ Crawls configured YouTube channels for new uploads, fetches transcripts, summari
    - `BRAVE_API_KEY` — Brave Search API key (used only if `YOUTUBE_API_KEY` is not set)
    - `GEMINI_API_KEY` — Google AI / Gemini API key
    - `TELEGRAM_BOT_TOKEN` — from [@BotFather](https://t.me/BotFather)
-   - `TELEGRAM_CHAT_ID` — message your bot, then call `getUpdates` or use [@userinfobot](https://t.me/userinfobot)
+   - `TELEGRAM_CHAT_ID` — one or more chat IDs (comma-separated) to send to. You can get it via `getUpdates` or [@userinfobot](https://t.me/userinfobot)
    - `YOUTUBE_CHANNELS` — comma-separated handles or names, e.g. `@MKBHD,@ChannelName`
 
 3. Run:
@@ -77,7 +77,7 @@ Crawls configured YouTube channels for new uploads, fetches transcripts, summari
   - **Transcripts**: `transcripts/<channel>_YYYY_MM_DD.txt` (appended per video)
   - **Summaries**: `summaries/<channel>_YYYY_MM_DD.md` (appended per video)
   - **HTMLs (optional)**: `htmls/<channel>_YYYY-MM-DD.html` (sent to Telegram when enabled)
-  - **Binary note**: when running the PyInstaller binary, these files are read/written relative to the **executable directory** (same folder as `dist/ai-agent`).
+  - **Docker note**: if you run in Docker, set `APP_DATA_DIR=/data` and mount a volume so outputs persist.
 
 ## Repo structure
 
@@ -93,7 +93,8 @@ ai-agent/
   processed_videos.json    # Idempotency store (already-processed video IDs)
 
   install.sh               # Create .venv and install from requirements.lock.txt
-  build_binary.sh          # Build a standalone macOS executable via PyInstaller
+  Dockerfile               # Build Docker image
+  .dockerignore            # Docker build context excludes
   requirements.txt         # Minimal dependency list (unpinned)
   requirements.lock.txt    # Fully pinned dependency lock (recommended)
   .env.example             # Environment variable template
@@ -112,36 +113,44 @@ ai-agent/
 - **Gemini model**: Set `GEMINI_MODEL` (e.g. `gemini-1.5-pro`) in `.env`.
 - **Scheduling**: Run `python main.py` via cron or a scheduler (e.g. once per day).
 
-## Build a standalone binary (macOS)
+## Run with Docker
 
-This project can be packaged into a single executable using PyInstaller.
+Build the image:
 
 ```bash
-chmod +x build_binary.sh
-./build_binary.sh
+docker build -t ai-agent .
 ```
 
-- Output: `dist/<name>` (default: `dist/ai-agent`)
-- Run:
+Run it (mount a local `./data` folder so outputs persist):
 
 ```bash
-./dist/ai-agent --help
-./dist/ai-agent --video -jRur5z6TPk
+mkdir -p data
+docker run --rm \
+  --env-file .env \
+  -e APP_DATA_DIR=/data \
+  -v "$(pwd)/data:/data" \
+  ai-agent
 ```
 
-### Binary build options
-
-PyInstaller builds are **not cross-platform** (build on each OS you want to support). On macOS, you can choose target arch.
-
-- `APP_NAME` (default: `ai-agent`)
-- `NAME_WITH_PLATFORM=1`: name output like `ai-agent-darwin-arm64`
-- `TARGET_ARCH=arm64|x86_64|universal2` (macOS only)
-
-Examples:
+or go to you target directory and run:
 
 ```bash
-NAME_WITH_PLATFORM=1 ./build_binary.sh
-TARGET_ARCH=universal2 NAME_WITH_PLATFORM=1 ./build_binary.sh
+mkdir -p data
+docker run --rm \
+  --env-file .env \
+  -e APP_DATA_DIR=/data \
+  -v ".:/data" \
+  ai-agent
+```
+
+Single-video mode in Docker:
+
+```bash
+docker run --rm \
+  --env-file .env \
+  -e APP_DATA_DIR=/data \
+  -v "$(pwd)/data:/data" \
+  ai-agent --video -jRur5z6TPk
 ```
 
 ## Updating the lock file (maintainers)

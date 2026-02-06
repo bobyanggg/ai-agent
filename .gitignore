@@ -7,10 +7,3 @@ processed_videos.json
 transcripts/
 summaries/
 *.html
-
-# PyInstaller build artifacts
-build/
-dist/
-*.spec
-.pyinstaller/
-.pyinstaller_cache/

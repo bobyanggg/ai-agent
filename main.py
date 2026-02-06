@@ -51,6 +51,9 @@ def _app_root_dir() -> Path:
     - Source run: repo directory (where main.py lives)
     - PyInstaller onefile: directory containing the executable (persistent across runs)
     """
+    env_dir = (os.environ.get("APP_DATA_DIR") or "").strip()
+    if env_dir:
+        return Path(env_dir).expanduser().resolve()
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parent
@@ -126,14 +129,27 @@ def _yyyymmdd_hyphen(yyyymmdd: str) -> str:
     return yyyymmdd.replace("_", "-")
 
 
+def _parse_telegram_chat_ids(raw: str | None) -> list[str]:
+    """
+    Parse TELEGRAM_CHAT_ID which may contain one or more IDs.
+
+    Supports comma-separated values, e.g.:
+      TELEGRAM_CHAT_ID=12345,-1001234567890
+    """
+    if not raw:
+        return []
+    parts = [p.strip() for p in raw.split(",")]
+    return [p for p in parts if p]
+
+
 def _save_and_send_html(
     *,
     yyyymmdd: str,
     channel_base: str,
     html_doc: str,
     telegram_token: str,
-    telegram_chat_id: str,
-) -> None:
+    telegram_chat_ids: list[str],
+) -> bool:
     """Save HTML and send it to Telegram as a document."""
     filename = f"{channel_base}_{_yyyymmdd_hyphen(yyyymmdd)}.html"
     content = html_doc.encode("utf-8")
@@ -143,17 +159,21 @@ def _save_and_send_html(
             f.write(content)
     except Exception as e:
         logger.warning("Could not save HTML for %s: %s", filename, e)
-    ok = send_document(
-        telegram_token,
-        telegram_chat_id,
-        filename=filename,
-        content_bytes=content,
-        caption=f"{channel_base} {_yyyymmdd_hyphen(yyyymmdd)}",
-    )
-    if ok:
-        logger.info("Sent HTML %s", filename)
-    else:
-        logger.warning("Failed to send HTML %s", filename)
+    any_ok = False
+    for chat_id in telegram_chat_ids:
+        ok = send_document(
+            telegram_token,
+            chat_id,
+            filename=filename,
+            content_bytes=content,
+            caption=f"{channel_base} {_yyyymmdd_hyphen(yyyymmdd)}",
+        )
+        any_ok = any_ok or ok
+        if ok:
+            logger.info("Sent HTML %s to chat %s", filename, chat_id)
+        else:
+            logger.warning("Failed to send HTML %s to chat %s", filename, chat_id)
+    return any_ok
 
 def _fetch_youtube_title(video_id: str) -> str | None:
     """Fetch video title via YouTube oEmbed (no API key). Returns None on failure."""
@@ -332,7 +352,7 @@ def run_single_video(
     gemini_model: str | None,
     youtube_key: str | None,
     telegram_token: str,
-    telegram_chat_id: str,
+    telegram_chat_ids: list[str],
 ) -> None:
     """Fetch transcript, summarize, send to Telegram for one video. Optionally save transcript."""
     meta = _fetch_video_metadata(video_id, youtube_key)
@@ -377,22 +397,35 @@ def run_single_video(
             title=title,
             header_lines=[url],
         )
-        _save_and_send_html(
+        html_ok = _save_and_send_html(
             yyyymmdd=yyyymmdd,
             channel_base=channel_base,
             html_doc=html_doc,
             telegram_token=telegram_token,
-            telegram_chat_id=telegram_chat_id,
+            telegram_chat_ids=telegram_chat_ids,
         )
+    else:
+        html_ok = False
     # If HTML sending is enabled, default to sending only the HTML document (no text summary).
     send_text = _bool_env("TELEGRAM_SEND_SUMMARY", default=True) and not _bool_env(
         "TELEGRAM_SEND_HTML", default=False
     )
     if send_text:
-        if send_video_summary(telegram_token, telegram_chat_id, title, url, summary):
-            logger.info("Sent summary for %s", video_id)
-        else:
-            logger.error("Failed to send Telegram message for %s", video_id)
+        any_ok = False
+        for chat_id in telegram_chat_ids:
+            ok = send_video_summary(telegram_token, chat_id, title, url, summary)
+            any_ok = any_ok or ok
+            if ok:
+                logger.info("Sent summary for %s to chat %s", video_id, chat_id)
+            else:
+                logger.warning("Failed to send summary for %s to chat %s", video_id, chat_id)
+        if not any_ok:
+            logger.error("Failed to send Telegram message for %s (all chats)", video_id)
+            raise SystemExit(1)
+    else:
+        # HTML-only mode: treat send as success only if HTML upload worked.
+        if _bool_env("TELEGRAM_SEND_HTML", default=False) and not html_ok:
+            logger.error("Failed to send HTML for %s (all chats)", video_id)
             raise SystemExit(1)
 
 
@@ -443,7 +476,7 @@ def process_video(
     gemini_model: str | None,
     youtube_key: str | None,
     telegram_token: str,
-    telegram_chat_id: str,
+    telegram_chat_ids: list[str],
     processed: set[str],
 ) -> None:
     """Fetch transcript, summarize, send to Telegram; skip if no transcript or on error."""
@@ -484,37 +517,45 @@ def process_video(
         summary_md=summary,
         video=video,
     )
+    any_sent = False
     if _bool_env("TELEGRAM_SEND_HTML", default=False):
         html_doc = summary_markdown_to_html_doc(
             summary,
             title=video.title,
             header_lines=[video.url],
         )
-        _save_and_send_html(
+        html_ok = _save_and_send_html(
             yyyymmdd=yyyymmdd,
             channel_base=channel_base,
             html_doc=html_doc,
             telegram_token=telegram_token,
-            telegram_chat_id=telegram_chat_id,
+            telegram_chat_ids=telegram_chat_ids,
         )
+        any_sent = any_sent or html_ok
     send_text = _bool_env("TELEGRAM_SEND_SUMMARY", default=True) and not _bool_env(
         "TELEGRAM_SEND_HTML", default=False
     )
     if send_text:
-        if send_video_summary(
-            telegram_token,
-            telegram_chat_id,
-            video.title,
-            video.url,
-            summary,
-        ):
-            processed.add(video.video_id)
-            logger.info("Sent summary for %s", video.video_id)
-        else:
-            logger.warning("Failed to send Telegram message for %s", video.video_id)
-    else:
-        # Mark processed if we at least generated output and/or sent HTML successfully above.
+        any_ok = False
+        for chat_id in telegram_chat_ids:
+            ok = send_video_summary(
+                telegram_token,
+                chat_id,
+                video.title,
+                video.url,
+                summary,
+            )
+            any_ok = any_ok or ok
+            if ok:
+                logger.info("Sent summary for %s to chat %s", video.video_id, chat_id)
+            else:
+                logger.warning("Failed to send summary for %s to chat %s", video.video_id, chat_id)
+        any_sent = any_sent or any_ok
+
+    if any_sent:
         processed.add(video.video_id)
+    else:
+        logger.warning("Nothing was sent for %s (all chats failed?)", video.video_id)
 
 
 def main() -> None:
@@ -533,10 +574,10 @@ def main() -> None:
     gemini_key = os.environ.get("GEMINI_API_KEY")
     youtube_key = os.environ.get("YOUTUBE_API_KEY")  # optional but needed for upload time
     telegram_token = os.environ.get("TELEGRAM_BOT_TOKEN")
-    telegram_chat_id = os.environ.get("TELEGRAM_CHAT_ID")
+    telegram_chat_ids = _parse_telegram_chat_ids(os.environ.get("TELEGRAM_CHAT_ID"))
     gemini_model = os.environ.get("GEMINI_MODEL") or None
 
-    if not all([gemini_key, telegram_token, telegram_chat_id]):
+    if not all([gemini_key, telegram_token]) or not telegram_chat_ids:
         logger.error("Missing env: GEMINI_API_KEY, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID")
         raise SystemExit(1)
 
@@ -559,7 +600,7 @@ def main() -> None:
                 gemini_model=gemini_model,
                 youtube_key=youtube_key,
                 telegram_token=telegram_token,
-                telegram_chat_id=telegram_chat_id,
+                telegram_chat_ids=telegram_chat_ids,
             )
         return
 
@@ -608,7 +649,7 @@ def main() -> None:
                         gemini_model=gemini_model,
                         youtube_key=youtube_key,
                         telegram_token=telegram_token,
-                        telegram_chat_id=telegram_chat_id,
+                        telegram_chat_ids=telegram_chat_ids,
                         processed=processed,
                     )
                 except Exception as e:
