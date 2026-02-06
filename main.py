@@ -110,8 +110,12 @@ def _date_yyyymmdd_from_published_at(published_at: str | None) -> str:
 
 
 def _channel_base_for_filenames(handle: str | None, title: str | None, fallback: str) -> str:
-    """Choose a stable channel base name for filenames (no leading @)."""
-    raw = (handle or "").strip() or (title or "").strip() or fallback
+    """
+    Choose a stable channel base name for filenames (no leading @).
+
+    Prefer the *real channel name* (title) over @handle, then fall back.
+    """
+    raw = (title or "").strip() or (handle or "").strip() or fallback
     if raw.startswith("@"):
         raw = raw[1:]
     return _safe_filename_base(raw) or "channel"
@@ -192,6 +196,26 @@ def _fetch_youtube_title(video_id: str) -> str | None:
         return None
 
 
+def _fetch_oembed(video_id: str) -> dict:
+    """Fetch basic metadata via YouTube oEmbed (no API key)."""
+    url = f"https://www.youtube.com/watch?v={video_id}"
+    try:
+        resp = requests.get(
+            "https://www.youtube.com/oembed",
+            params={"url": url, "format": "json"},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        data = resp.json() or {}
+        return {
+            "title": (data.get("title") or "").strip() or None,
+            "author_name": (data.get("author_name") or "").strip() or None,
+            "author_url": (data.get("author_url") or "").strip() or None,
+        }
+    except Exception:
+        return {"title": None, "author_name": None, "author_url": None}
+
+
 def _fetch_oembed_author_url(video_id: str) -> str | None:
     """Fetch channel URL from YouTube oEmbed (no API key)."""
     url = f"https://www.youtube.com/watch?v={video_id}"
@@ -236,9 +260,11 @@ def _fetch_video_metadata(video_id: str, youtube_api_key: str | None) -> dict:
         "published_at": None,
     }
 
-    # Title + (often) channel handle via oEmbed
-    meta["title"] = _fetch_youtube_title(video_id)
-    author_url = _fetch_oembed_author_url(video_id)
+    # Title + channel name/handle via oEmbed (no API key).
+    oembed = _fetch_oembed(video_id)
+    meta["title"] = oembed.get("title")
+    meta["channel_title"] = oembed.get("author_name")
+    author_url = oembed.get("author_url")
     if author_url:
         meta["channel_handle"] = _handle_from_channel_url(author_url)
 
